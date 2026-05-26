@@ -1,0 +1,153 @@
+services:
+  # Base de datos MySQL (persistente) accesible solo desde la red privada
+  db:
+    # Imagen oficial, versión fija (evita "latest")
+    image: mysql:8.4.0
+    # Parámetros del motor MySQL orientados a producción (puedes ajustar según RAM/IOPS)
+    command:
+      # Charset/Collation estándar para soportar emojis y multilenguaje
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      # Buffer pool (memoria) para mejorar lecturas/escrituras InnoDB
+      - --innodb_buffer_pool_size=256M
+      # Durabilidad: 1 = fsync por transacción (más seguro, más IO)
+      - --innodb_flush_log_at_trx_commit=1
+      # Sincroniza el binlog a disco para consistencia ante caída
+      - --sync_binlog=1
+      # Retención de binlogs (7 días) para recuperación/replicación si aplica
+      - --binlog_expire_logs_seconds=604800
+    # Variables para inicialización de MySQL
+    # Nota (práctica): se incluyen valores por defecto para que el stack arranque sin .env.
+    # En producción, elimina los ":-" y define estas variables fuera del YAML.
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-despacho_db}
+      MYSQL_USER: ${DB_USERNAME:-appuser}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-app_pass_123}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_pass_123}
+    # Persistencia con named volume (no bind mount) para datos de MySQL
+    volumes:
+      - mysql_data:/var/lib/mysql
+    # Solo red privada: NO expone puertos al host
+    networks:
+      - private_net
+    # Healthcheck: Compose lo usa para "depends_on: condition: service_healthy"
+    healthcheck:
+      test: [ "CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    # Reinicio automático ante caída (apto para prod en una VM)
+    restart: unless-stopped
+    # Seguridad: evita escalado de privilegios dentro del contenedor
+    security_opt:
+      - no-new-privileges:true
+    # Reduce superficie de ataque eliminando capacidades innecesarias
+    cap_drop:
+      - NET_RAW
+      - SYS_PTRACE
+
+  # Backend Spring Boot: API que consume MySQL y es accesible por el Frontend
+  backend:
+    # Se construye desde el Dockerfile multi-stage del backend
+    build:
+      context: ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
+      dockerfile: Dockerfile
+    # Variables que usa Spring para armar la URL JDBC (ver application.properties)
+    environment:
+      DB_ENDPOINT: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-despacho_db}
+      DB_USERNAME: ${DB_USERNAME:-appuser}
+      DB_PASSWORD: ${DB_PASSWORD:-app_pass_123}
+    # Doble red:
+    # - public_net: permite que el frontend lo alcance por DNS "backend"
+    # - private_net: permite que el backend alcance a "db" sin exponer MySQL
+    networks:
+      - public_net
+      - private_net
+    # Orden estricto: solo inicia si MySQL está "healthy"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Healthcheck: valida que la app ya responde HTTP antes de habilitar al frontend
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fsS http://localhost:8081/swagger-ui.html >/dev/null || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    # Endurecimiento:
+    # - read_only: filesystem root de solo lectura
+    # - tmpfs: espacio temporal en memoria para /tmp
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    # Elimina todas las capacidades Linux (el proceso corre como usuario no-root en el Dockerfile)
+    cap_drop:
+      - ALL
+    # init: evita procesos zombie (tini) y mejora el manejo de señales
+    init: true
+
+  # Frontend React (Vite build) servido por Nginx (solo expone HTTP al host)
+  frontend:
+    # Se construye desde el Dockerfile multi-stage del frontend
+    build:
+      context: ./front_despacho
+      dockerfile: Dockerfile
+      # ARG de build: se inyecta en el bundle durante "vite build"
+      args:
+        VITE_API_URL: http://backend:8081
+    # ENV en runtime (no siempre afecta al bundle ya compilado, pero queda visible para el contenedor)
+    environment:
+      VITE_API_URL: http://backend:8081
+    # Exposición mínima: solo el frontend sale al host
+    ports:
+      - "80:8080"
+    # Solo red pública (no necesita ver la DB)
+    networks:
+      - public_net
+    # Orden estricto: solo inicia cuando el backend está "healthy"
+    depends_on:
+      backend:
+        condition: service_healthy
+    # Healthcheck del Nginx
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    # Endurecimiento (Nginx):
+    # - root FS read-only
+    # - tmpfs para cache y pid/run
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:rw,noexec,nosuid,size=32m,uid=10001,gid=10001,mode=0755
+      - /var/run:rw,noexec,nosuid,size=8m,uid=10001,gid=10001,mode=0755
+    security_opt:
+      - no-new-privileges:true
+    # Nginx puede correr sin capacidades extra en este escenario
+    cap_drop:
+      - ALL
+    init: true
+
+networks:
+  # Red "pública" (interna de Docker): conecta frontend <-> backend y permite exponer frontend al host
+  public_net:
+    driver: bridge
+  # Red "privada" estricta: NO enrutable fuera de Docker; solo backend<->db
+  private_net:
+    driver: bridge
+    internal: true
+
+volumes:
+  # Named volume administrado por Docker para persistir /var/lib/mysql
+  mysql_data:
+    name: mysql_data
+    labels:
+      com.example.backup: "true"

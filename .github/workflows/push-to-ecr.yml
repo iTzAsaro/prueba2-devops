@@ -9,10 +9,9 @@ permissions:
   contents: read
 
 env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-  ECR_REPO_FRONT: ${{ secrets.ECR_REPO_FRONT }}
-  ECR_REPO_BACK: ${{ secrets.ECR_REPO_BACK }}
+  AWS_REGION: us-east-1
+  ECR_REPO_FRONT: ${{ secrets.ECR_REPO_FRONT != '' && secrets.ECR_REPO_FRONT || 'front-devops-2' }}
+  ECR_REPO_BACK: ${{ secrets.ECR_REPO_BACK != '' && secrets.ECR_REPO_BACK || 'back-devops-2' }}
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
@@ -22,14 +21,46 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Validar configuración requerida
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          ECR_REPO_FRONT: ${{ env.ECR_REPO_FRONT }}
+          ECR_REPO_BACK: ${{ env.ECR_REPO_BACK }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+        run: |
+          missing=0
+          for k in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ECR_REPO_FRONT ECR_REPO_BACK AWS_REGION; do
+            if [ -z "$(printenv "$k")" ]; then
+              echo "::error::Falta el valor requerido: $k"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (sin session token)
+        if: ${{ secrets.AWS_SESSION_TOKEN == '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Configure AWS credentials (con session token)
+        if: ${{ secrets.AWS_SESSION_TOKEN != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Login to Amazon ECR
+        id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build and push backend
@@ -39,8 +70,8 @@ jobs:
           file: ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO/Dockerfile
           push: true
           tags: |
-            ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO_BACK }}:${{ env.IMAGE_TAG }}
-            ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO_BACK }}:latest
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPO_BACK }}:${{ env.IMAGE_TAG }}
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPO_BACK }}:latest
 
       - name: Build and push frontend
         uses: docker/build-push-action@v6
@@ -49,5 +80,5 @@ jobs:
           file: ./front_despacho/Dockerfile
           push: true
           tags: |
-            ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO_FRONT }}:${{ env.IMAGE_TAG }}
-            ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO_FRONT }}:latest
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPO_FRONT }}:${{ env.IMAGE_TAG }}
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPO_FRONT }}:latest

@@ -48,7 +48,7 @@ services:
       - SYS_PTRACE
 
   # Backend Spring Boot: API que consume MySQL y es accesible por el Frontend
-  backend:
+  backend-despachos:
     # Se construye desde el Dockerfile multi-stage del backend
     build:
       context: ./back-Despachos_SpringBoot/Springboot-API-REST-DESPACHO
@@ -92,18 +92,47 @@ services:
     # init: evita procesos zombie (tini) y mejora el manejo de señales
     init: true
 
+  backend-ventas:
+    build:
+      context: ./back-Ventas_SpringBoot/Springboot-API-REST
+      dockerfile: Dockerfile
+    environment:
+      DB_ENDPOINT: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-despacho_db}
+      DB_USERNAME: ${DB_USERNAME:-appuser}
+      DB_PASSWORD: ${DB_PASSWORD:-app_pass_123}
+    networks:
+      - public_net
+      - private_net
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fsS http://localhost:8080/swagger-ui.html >/dev/null || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    init: true
+
   # Frontend React (Vite build) servido por Nginx (solo expone HTTP al host)
   frontend:
     # Se construye desde el Dockerfile multi-stage del frontend
     build:
       context: ./front_despacho
       dockerfile: Dockerfile
-      # ARG de build: se inyecta en el bundle durante "vite build"
-      args:
-        VITE_API_URL: http://backend:8081
-    # ENV en runtime (no siempre afecta al bundle ya compilado, pero queda visible para el contenedor)
     environment:
-      VITE_API_URL: http://backend:8081
+      DESPACHOS_UPSTREAM: backend-despachos:8081
+      VENTAS_UPSTREAM: backend-ventas:8080
     # Exposición mínima: solo el frontend sale al host
     ports:
       - "80:8080"
@@ -112,7 +141,9 @@ services:
       - public_net
     # Orden estricto: solo inicia cuando el backend está "healthy"
     depends_on:
-      backend:
+      backend-despachos:
+        condition: service_healthy
+      backend-ventas:
         condition: service_healthy
     # Healthcheck del Nginx
     healthcheck:

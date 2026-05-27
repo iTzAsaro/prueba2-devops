@@ -14,7 +14,6 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import java.net.URI;
 import java.util.List;
 
-@CrossOrigin(origins = "*")
 @RestController
 @RequestMapping("api/v1/ventas")
 @Tag(name = "Venta", description = "Controlador para gestionar ventas")
@@ -62,5 +61,4 @@ public class VentaController {
         return ResponseEntity.noContent().build(); // Respuesta 204 No Content si se elimina correctamente
     }
 }
-
 

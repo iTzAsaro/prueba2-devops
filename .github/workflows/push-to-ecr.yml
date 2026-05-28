@@ -110,6 +110,20 @@ jobs:
 
   deploy-to-ec2:
     needs: build-and-push
+    if: >-
+      ${{
+        secrets.BACKEND_INSTANCE_ID != '' &&
+        secrets.FRONTEND_INSTANCE_ID != '' &&
+        secrets.BACKEND_PRIVATE_IP != '' &&
+        secrets.FRONT_PUBLIC_URL != '' &&
+        secrets.MYSQL_DATABASE != '' &&
+        secrets.MYSQL_USER != '' &&
+        secrets.MYSQL_PASSWORD != '' &&
+        secrets.MYSQL_ROOT_PASSWORD != '' &&
+        secrets.DB_NAME != '' &&
+        secrets.DB_USERNAME != '' &&
+        secrets.DB_PASSWORD != ''
+      }}
     runs-on: ubuntu-latest
     steps:
       - name: Configure AWS credentials (Access Keys)

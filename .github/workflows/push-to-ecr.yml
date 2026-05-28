@@ -2,7 +2,7 @@ name: Build y Push del ECR (Frontend + Backend)
 
 on:
   push:
-    branches: ["main"]
+    branches: ["deploy"]
   workflow_dispatch: {}
 
 permissions:
